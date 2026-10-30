@@ -3865,6 +3865,292 @@ TriggerTab:AddToggle({
 -- ==========================================
 -- 初期化
 -- ==========================================
+-- ==========================================
+-- Vortex 機能追加タブ (Orion UI)
+-- ==========================================
+local function fR(path, name) local ok, r = pcall(function() local c = ReplicatedStorage for _, s in ipairs(path) do c = c:WaitForChild(s, 5) if not c then return end end return c:FindFirstChild(name) or c:WaitForChild(name, 3) end) return ok and r or nil end
+local VStruggle = fR({"CharacterEvents"}, "Struggle")
+local VRagdoll = fR({"CharacterEvents"}, "RagdollRemote")
+local VSetNet = fR({"GrabEvents"}, "SetNetworkOwner")
+local VDGL = fR({"GrabEvents"}, "DestroyGrabLine")
+local VSpawnToy = fR({"MenuToys"}, "SpawnToyRemoteFunction")
+local VDestroyToy = fR({"MenuToys"}, "DestroyToy")
+local VSticky = fR({"PlayerEvents"}, "StickyPartEvent")
+local VGameNotify = fR({"GameCorrectionEvents"}, "GameCorrectionsNotify")
+local VIsHeld = LocalPlayer:WaitForChild("IsHeld", 5)
+local VCanSpawnToy = LocalPlayer:WaitForChild("CanSpawnToy", 5)
+
+local function getHRP() local c = LocalPlayer.Character return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHum() local c = LocalPlayer.Character return c and c:FindFirstChildOfClass("Humanoid") end
+
+local VortexTab = Window:MakeTab({
+    Name = "Vortex",
+    Icon = "rbxassetid://4483345998",
+    PremiumOnly = false
+})
+
+-- 1. LOCAL PLAYER
+VortexTab:AddSection({ Name = "Local Player" })
+VortexTab:AddSlider({ Name = "WalkSpeed", Min = 16, Max = 300, Default = 16, Increment = 1, Callback = function(v) local h = getHum() if h then h.WalkSpeed = v end end })
+VortexTab:AddSlider({ Name = "JumpPower", Min = 50, Max = 300, Default = 50, Increment = 1, Callback = function(v) local h = getHum() if h then h.UseJumpPower = true h.JumpPower = v end end })
+
+local vNoclip = false
+VortexTab:AddToggle({ Name = "Noclip", Default = false, Callback = function(v) vNoclip = v end })
+RunService.Stepped:Connect(function()
+    if vNoclip then
+        local c = LocalPlayer.Character
+        if c then for _, p in pairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end
+    end
+end)
+
+local vFly = false
+local vFlyBV, vFlyBG
+VortexTab:AddToggle({ Name = "Fly (WASD)", Default = false, Callback = function(v)
+    vFly = v
+    local hrp = getHRP()
+    if v and hrp then
+        vFlyBV = Instance.new("BodyVelocity", hrp) vFlyBV.MaxForce = Vector3.new(math.huge,math.huge,math.huge) vFlyBV.Velocity = Vector3.zero
+        vFlyBG = Instance.new("BodyGyro", hrp) vFlyBG.MaxTorque = Vector3.new(math.huge,math.huge,math.huge) vFlyBG.P = 1000
+    elseif not v then
+        if vFlyBV then vFlyBV:Destroy() vFlyBV=nil end
+        if vFlyBG then vFlyBG:Destroy() vFlyBG=nil end
+    end
+end })
+RunService.RenderStepped:Connect(function()
+    if vFly then
+        local hrp = getHRP() if not hrp then return end
+        if not vFlyBV or not vFlyBG then
+            vFlyBV = Instance.new("BodyVelocity", hrp) vFlyBV.MaxForce = Vector3.new(math.huge,math.huge,math.huge) vFlyBV.Velocity = Vector3.zero
+            vFlyBG = Instance.new("BodyGyro", hrp) vFlyBG.MaxTorque = Vector3.new(math.huge,math.huge,math.huge) vFlyBG.P = 1000
+        end
+        local cam = Workspace.CurrentCamera
+        local move = Vector3.zero
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0,1,0) end
+        vFlyBV.Velocity = move * 50
+        vFlyBG.CFrame = cam.CFrame
+    end
+end)
+
+-- 2. DEFENSE
+VortexTab:AddSection({ Name = "Defense" })
+local vAntiGrabCon
+VortexTab:AddToggle({ Name = "Anti-Grab", Default = false, Callback = function(v)
+    if v then
+        vAntiGrabCon = RunService.RenderStepped:Connect(function()
+            local hrp = getHRP()
+            if hrp and hrp.ReceiveAge ~= 0 then
+                hrp.Anchored = true
+                if VIsHeld then VIsHeld.Value = false end
+                if VStruggle then VStruggle:FireServer() end
+                if VRagdoll then VRagdoll:FireServer(hrp, 0) end
+                local hum = getHum() if hum then hum.AutoRotate = true end
+                hrp.Anchored = false
+            end
+        end)
+    else if vAntiGrabCon then vAntiGrabCon:Disconnect() end end
+end })
+
+VortexTab:AddToggle({ Name = "Anti-Ragdoll", Default = false, Callback = function(v)
+    if not v then return end
+    local function setup(char)
+        local hum = char and char:WaitForChild("Humanoid",5) if not hum then return end
+        hum.BreakJointsOnDeath = false hum.AutoRotate = true hum.PlatformStand = false
+        hum.HealthChanged:Connect(function(h) if h<=0 then hum.Health = 1 end end)
+        hum:GetPropertyChangedSignal("PlatformStand"):Connect(function() if hum.PlatformStand then hum.PlatformStand = false end end)
+        RunService.RenderStepped:Connect(function() if hum.Sit and hum.SeatPart==nil then hum.Sit = false end end)
+    end
+    setup(LocalPlayer.Character) LocalPlayer.CharacterAdded:Connect(setup)
+end })
+
+local vAntiHouseCon
+VortexTab:AddToggle({ Name = "Anti-Kill (House)", Default = false, Callback = function(v)
+    local pos = Vector3.new(-544.836304, -7.35040474, 77.8825378)
+    if v then
+        vAntiHouseCon = RunService.Heartbeat:Connect(function()
+            local hrp = getHRP() if hrp then hrp.CFrame = CFrame.new(pos) end
+        end)
+    else if vAntiHouseCon then vAntiHouseCon:Disconnect() end end
+end })
+
+local vVoidOrig
+VortexTab:AddToggle({ Name = "Anti-Void", Default = false, Callback = function(v)
+    if v then vVoidOrig = Workspace.FallenPartsDestroyHeight Workspace.FallenPartsDestroyHeight = -1e95 else Workspace.FallenPartsDestroyHeight = vVoidOrig or -100 end
+end })
+
+local vAntiExeCon
+VortexTab:AddToggle({ Name = "Anti-Explosion", Default = false, Callback = function(v)
+    if v then
+        local hrp = getHRP() if not hrp then return end
+        vAntiExeCon = Workspace.ChildAdded:Connect(function(m)
+            if m.Name == "Part" then
+                if (m.Position - hrp.Position).Magnitude <= 20 then hrp.Anchored = true task.wait(0.05) hrp.Anchored = false end
+            end
+        end)
+    else if vAntiExeCon then vAntiExeCon:Disconnect() end end
+end })
+
+VortexTab:AddToggle({ Name = "Anti-Sticky", Default = false, Callback = function(v)
+    local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+    if ps and ps:FindFirstChild("StickyPartsTouchDetection") then ps.StickyPartsTouchDetection.Disabled = v end
+end })
+
+-- 3. ANTI-KICK
+VortexTab:AddSection({ Name = "Anti-Kick" })
+local vAKickRun = false
+VortexTab:AddToggle({ Name = "Anti-Kick (Shuriken)", Default = false, Callback = function(v)
+    vAKickRun = v
+    if not v then
+        local inv = Workspace:FindFirstChild(LocalPlayer.Name.."SpawnedInToys")
+        if inv and VDestroyToy then for _,o in pairs(inv:GetChildren()) do if o.Name=="AntiKick" or o.Name=="NinjaShuriken" then pcall(function() VDestroyToy:FireServer(o) end) end end end
+        return
+    end
+    task.spawn(function()
+        while vAKickRun do
+            pcall(function()
+                local c = LocalPlayer.Character
+                if not c or not c:FindFirstChild("Humanoid") or c.Humanoid.Health <= 0 then return end
+                if not VCanSpawnToy or not VCanSpawnToy.Value then task.wait(0.1) return end
+                local hrp = c:FindFirstChild("HumanoidRootPart") if not hrp then return end
+                local inv = Workspace:FindFirstChild(LocalPlayer.Name.."SpawnedInToys") if not inv then return end
+                local k = inv:FindFirstChild("NinjaShuriken") or inv:FindFirstChild("AntiKick")
+                if not k then
+                    if VSpawnToy then pcall(function() VSpawnToy:InvokeServer("NinjaShuriken", hrp.CFrame * CFrame.new(0,12,20), Vector3.zero) end) end
+                    task.wait(0.3) k = inv:FindFirstChild("NinjaShuriken")
+                end
+                if k then
+                    k.Name = "AntiKick"
+                    if k:FindFirstChild("StickyPart") then
+                        local sp = k:FindFirstChild("SoundPart")
+                        if sp and VSetNet then pcall(function() VSetNet:FireServer(sp, sp.CFrame) end) end
+                        local fp = hrp:FindFirstChild("FirePlayerPart") or hrp
+                        if fp and VSticky then pcall(function() VSticky:FireServer(k.StickyPart, fp, CFrame.new(0,0,0)*CFrame.Angles(0,math.rad(90),math.rad(90))) end) end
+                        for _,o in pairs(k:GetChildren()) do if o:IsA("BasePart") then o.CanTouch=false o.CanCollide=false o.CanQuery=false o.Transparency=1 end end
+                    end
+                end
+            end)
+            task.wait(0.3)
+        end
+    end)
+end })
+
+VortexTab:AddToggle({ Name = "Auto-Reset (Flying)", Default = true, Callback = function(v)
+    if v and VGameNotify then
+        VGameNotify.OnClientEvent:Connect(function(action)
+            if action == "Flying" then
+                if VStruggle then VStruggle:FireServer(LocalPlayer) end
+                local h = getHum() if h then h.Health = 0 end
+            end
+        end)
+    end
+end })
+
+-- 4. TARGET
+VortexTab:AddSection({ Name = "Target" })
+local vTargetPlr = nil
+local function getPlayersList()
+    local t = {}
+    for _, p in ipairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.Name) end end
+    return t
+end
+VortexTab:AddDropdown({ Name = "ターゲット選択", Default = "", Options = getPlayersList(), Callback = function(name) vTargetPlr = name end })
+
+VortexTab:AddToggle({ Name = "Bring (Grab)", Default = false, Callback = function(v)
+    if v then
+        task.spawn(function()
+            while vTargetPlr do
+                local tp = Players:FindFirstChild(vTargetPlr)
+                local hrp = getHRP()
+                if tp and tp.Character and hrp then
+                    local torso = tp.Character:FindFirstChild("Torso") or tp.Character:FindFirstChild("UpperTorso")
+                    if torso then
+                        if VStruggle then VStruggle:FireServer() end
+                        for i=1,5 do
+                            if VSetNet then VSetNet:FireServer(torso, torso.CFrame) end
+                            task.wait()
+                        end
+                        torso.CFrame = hrp.CFrame * CFrame.new(0,0,-4)
+                    end
+                end
+                task.wait(0.1)
+            end
+        end)
+    end
+end })
+
+VortexTab:AddToggle({ Name = "Kill (Loop)", Default = false, Callback = function(v)
+    if v then
+        task.spawn(function()
+            while vTargetPlr do
+                local tp = Players:FindFirstChild(vTargetPlr)
+                if tp and tp.Character then
+                    local tHRP = tp.Character:FindFirstChild("HumanoidRootPart")
+                    local tHum = tp.Character:FindFirstChildOfClass("Humanoid")
+                    if tHRP and tHum and tHum.Health > 0 then
+                        if VSetNet then VSetNet:FireServer(tHRP, tHRP.CFrame) end
+                        if VDGL then VDGL:FireServer(tHRP) end
+                        tHum.Health = 0
+                        tHum:ChangeState(Enum.HumanoidStateType.Dead)
+                    end
+                end
+                task.wait(0.5)
+            end
+        end)
+    end
+end })
+
+VortexTab:AddToggle({ Name = "Fling", Default = false, Callback = function(v)
+    if v then
+        task.spawn(function()
+            while vTargetPlr do
+                local tp = Players:FindFirstChild(vTargetPlr)
+                local hrp = getHRP()
+                if tp and tp.Character and hrp then
+                    local tHRP = tp.Character:FindFirstChild("HumanoidRootPart")
+                    if tHRP then
+                        local bav = Instance.new("BodyAngularVelocity", hrp)
+                        bav.AngularVelocity = Vector3.new(0,9999,0)
+                        bav.MaxTorque = Vector3.new(math.huge,math.huge,math.huge)
+                        hrp.CFrame = tHRP.CFrame
+                        task.wait(0.5)
+                        bav:Destroy()
+                    end
+                end
+                task.wait(0.1)
+            end
+        end)
+    end
+end })
+
+-- 5. ESP
+VortexTab:AddSection({ Name = "ESP" })
+local vEspBoxes = {}
+local vPclOn = false
+VortexTab:AddToggle({ Name = "PCLD ESP", Default = false, Callback = function(v)
+    vPclOn = v
+    if not v then for _,b in pairs(vEspBoxes) do b:Destroy() end vEspBoxes={} return end
+    task.spawn(function()
+        while vPclOn do
+            for _, obj in pairs(Workspace:GetDescendants()) do
+                if vPclOn and obj:IsA("BasePart") and (string.find(string.lower(obj.Name), "playercharacterlocation") or string.find(string.lower(obj.Name), "partesp")) then
+                    if not vEspBoxes[obj] then
+                        local b = Instance.new("BoxHandleAdornment", game.CoreGui)
+                        b.Adornee=obj b.AlwaysOnTop=true b.ZIndex=5 b.Size=obj.Size b.Color3=Color3.new(0,1,1) b.Transparency=0.5
+                        vEspBoxes[obj]=b
+                        obj.AncestryChanged:Connect(function() if not obj.Parent and b then b:Destroy() vEspBoxes[obj]=nil end end)
+                    end
+                end
+            end
+            task.wait(1)
+        end
+    end)
+end })
+-- ==========================================
+-- ここまで
+-- ==========================================
 OrionLib:Init()
 
 OrionLib:MakeNotification({
